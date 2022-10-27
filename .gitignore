@@ -1,0 +1,4 @@
+/target
+/bin/actyx
+/bin/actyx-data/*
+**/.DS_Store
