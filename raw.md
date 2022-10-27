@@ -26,7 +26,7 @@ https://github.com/ipfs-rust/ipfs-embed
   - local data must always be in a consistent state
 - soft real time
   - long pauses extremely rare, but not safety critical
-- might not be appropriate for a cloud ipfs
+- api might not be appropriate for a cloud ipfs
 
 ---
 
@@ -41,35 +41,71 @@ https://github.com/ipfs-rust/ipfs-embed
 
 # blocking local io
 
-- my opinion: only sane thing to do on embedded
-- async is not without (mental and performance) overhead
-- simplifies writing complex rust code on top
+- async is not without perf and mental overhead
+- sync simplifies writing complex rust code on top
   - see my banyan talk in the ipfs 201 session
 - accessing local data should be memory mapped IO anyway
+- my opinion: only sane thing to do on embedded
 - this will be different for a cloud deployment
 
-##
+## Local IO api
 
 ```rust
 // Returns a block from the block store.
-pub fn get(&self, cid: &Cid) -> Result<Block<P>>
+pub fn get(&self, cid: &Cid) -> Result<Block>
 
 // Inserts a block in to the block store.
-pub fn insert(&self, block: Block<P>) -> Result<()>
+// Note: will not automatically publish on the DHT
+pub fn insert(&self, block: Block) -> Result<()>
 
 // Checks if the block is in the block store.
 pub fn contains(&self, cid: &Cid) -> Result<bool>
 ```
 
-##
+## Mental cost of async
 
 ```rust
-
+    fn add_stream<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        path: &'life1 Path,
+        wrap: bool
+    ) -> Pin<Box<dyn Future<Output = Result<LocalBoxStream<'static, Result<AddEvent>>>> + 'async_trait>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    { ... }
 ```
 
+## Perf cost of async
+
+- Looks innocent enough
+  ```rust
+#[async_trait]
+pub trait IpfsFetchApi {
+    async fn fetch(&self, cid: &Cid) -> Result<Option<Bytes>>;
+```
+- But allocates even for getting a 1 byte block from fast local storage
+  ```rust
+trait IpfsFetchApi {
+    fn fetch<'a, 'life0, 'life1, 'async_trait>(
+        &'life0 self, cid: &'life1 Cid,
+    ) -> Pin<Box<dyn Future<Output = Result<Bytes>> + 'async_trait>>
+```
+- in async rust, abstraction is no longer without cost
+
+## But surely not *everything* can be sync?
+
+- I think sled hits a sweet spot
+- Cheap local interactions are sync
+- Flush is async
+- Ipfs-Embed follows this
+  - `sync`, `fetch`, `flush` are async
+- <sled author on async>
+- <tomaka rant on async>
 # Pinning
 
-- pinning has *nothing* to do with the actual data
+- pinning is independent of what data you actually have
 - you can pin things you don't have
   - pin the root of wikipedia before looking at it
   - while you browse it everything will be kept
@@ -85,7 +121,7 @@ pub fn contains(&self, cid: &Cid) -> Result<bool>
 - basically just "gc, leave me alone while I build this"
 - ephemeral. On restart they are gone
 - easy to implement with an embedded in-process ipfs
-
+<!--- lifetime of ipfs is the same as lifetime of the app -->
 ## API
 
 ```rust
@@ -95,15 +131,6 @@ pub fn create_temp_pin(&self) -> Result<TempPin>
 // Adds a new root to a temporary pin.
 pub fn temp_pin(&self, tmp: &mut TempPin, cid: &Cid) -> Result<()>
 ```
-
-## Usage example
-
-```rust
-```
-
-## Dags are always built from the leaves up
-
-<picture of dag building>
 
 # Named pins / aliases
 
@@ -125,11 +152,13 @@ pub fn alias<T: AsRef<[u8]> + Send + Sync>(
 
 # Network
 
-- fetch, like get but gets also from network
-- sync, syncs an entire DAG
+- `fetch`, like get but gets also from network
+- `sync`, syncs an entire DAG
   - returns a stream of progress updates
+- gossipsub `publish`/`subscribe`
+- `broadcast` to all connected peers
 
-## API
+## Blocks API
 
 ```rust
 // Either returns a block if it’s in the block store or tries to retrieve it from a peer.
@@ -139,14 +168,17 @@ pub async fn fetch(&self, cid: &Cid, providers: Vec<PeerId>) -> Result<Block<P>>
 pub fn sync(&self, cid: &Cid, providers: Vec<PeerId>) -> SyncQuery<P>
 ```
 
-## Sync code example
+## Messaging API
 
 ```rust
-```
+    /// Subscribes to a topic returning a Stream of messages.
+    pub fn subscribe(&mut self, topic: String) -> impl Future<Output = Result<impl Stream<Item = GossipEvent>>>;
 
-## Fetch code example
+    /// Publishes a new message in a `topic`, sending the message to all subscribed peers.
+    pub fn publish(&mut self, topic: String, msg: Vec<u8>) -> impl Future<Output = Result<()>>;
 
-```rust
+    /// Publishes a new message in a `topic`, sending the message to all subscribed connected peers.
+    pub fn broadcast(&mut self, topic: String, msg: Vec<u8>) -> impl Future<Output = Result<()>>;
 ```
 
 # Store
@@ -154,11 +186,17 @@ pub fn sync(&self, cid: &Cid, providers: Vec<PeerId>) -> SyncQuery<P>
 - based on [sqlite](https://www.sqlite.org/index.html)
 - was going to use [sled](https://crates.io/crates/sled), but author advised against it
   - "if reliability is your primary constraint, use SQLite. sled is beta."
+
+## Future store?
+
 - working on my own custom db [radixdb](https://crates.io/crates/radixdb)
+  - radix tree with pluggable storage backend
+  - marble by <sled author> as possible storage backend
+  - WASM compatible low perf but simple storage backends
 
 # GC
 
-- Uses sqlite query to figure out what to keep
+- Uses recursive sqlite query to figure out what to keep
 - `WITH_RECURSIVE` FTW
 <!---
   not that fast, but rocks solid and quick to implement bc sqlite
@@ -217,8 +255,8 @@ pub struct StorageConfig {
 - Customizable caching strategy
 - in memory LRU
 - persistent LRU in separate db
-  - access db can be non-ACID db
-- prefer to keep certain blocks, e.g. unixfs directories
+  - access db can be fast non-ACID db
+- heurisics to keep certain blocks, e.g. unixfs directories
 
 ## Caching trait
 
@@ -234,10 +272,42 @@ pub trait CacheTracker {
 }
 ```
 
+# Sync example
+
+```rust
+    let mut tmp = a.create_temp_pin()?;
+    ipfs.temp_pin(&mut tmp, cid);
+    b.sync(cid, peers)
+        .await?;
+    b.alias(DAG_ROOT, Some(cid))?;
+    drop(tmp);
+```
+
+# Build example
+
+```rust
+    let mut tmp = ipfs.create_temp_pin()?;
+    while let Some(block) = builder.next() {
+        ipfs.temp_pin(&mut tmp, block.cid())?;
+        let _ = a.insert(block)?;
+    }
+    a.alias(DAG_ROOT, builder.prev.as_ref())?;
+```
+
 # Peers
 
+- can't afford to have 600 peers on embed hw
+- so choosing which peers to keep becomes important
 - prioritize peers based on source
-- e.g.
-  - bootstrap forever
-  - manually connected for longer than mdns
-  - ...
+- bootstrap peers forever
+- manually connected for longer than mdns
+- mdns (probably local) longer than other
+
+# API Questions
+
+- should temp pins be `Send` + `Sync` + `Clone`
+- best way to notify api user of progress
+  - currently struct that implements `Stream` and `Future`.
+- should subscribe be for pubsub and broadcast, or separate?
+- biggest: incomplete sync of graphs
+  - graphsync.rs?

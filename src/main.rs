@@ -48,5 +48,7 @@ async fn main() -> anyhow::Result<()> {
     while let Some(update) = updates.next().await {
         println!("{:?}", update);
     }
+
+    let pin = ipfs.flush()
     Ok(())
 }
