@@ -2,22 +2,32 @@
 title: Ipfs-Embed
 author: Rüdiger Klaehn
 theme: Copenhagen
-date: October 30, 2022
+date: October 28, 2022
 lang: en
   
 ---
 
+# About me
+
+- [Heavens Above GmbH](https://www.heavens-above.com/)
+  - telemetry archive for Columbus module of the ISS
+- [Actyx AG](https://www.actyx.com/)
+  - distributed event sourcing for factories
+- [number zero](n0.computer)
+  - iroh, fastest ipfs on any planet
+  
 # Ipfs-Embed
 
 https://github.com/ipfs-rust/ipfs-embed
 
-- built by and for actyx.com
+- started by David Craven in 2020
+- built by David and me for [actyx.com](actyx.com)
 - open source (MIT+Apache2)
 - *some* kubo interop, but not primary design goal
-- for small swarms
+- intended for small private swarms
 - lots of bulletproofing due to prod use
 
-# Ipfs-Embed features
+# Features
 
 - low and *bounded* resource usage, in particular memory
 - api guided by [local first](https://www.inkandswitch.com/local-first/) principles
@@ -25,13 +35,12 @@ https://github.com/ipfs-rust/ipfs-embed
   - never rely on the network being available
   - local data must always be in a consistent state
 - soft real time
-  - long pauses extremely rare, but not safety critical
+  - long pauses extremely rare, no safety critical usage
 - api might not be appropriate for a cloud ipfs
 
----
+# Platforms
 
-<!--- mic drop moment -->
-![](img/actyx-download.png)
+[![](img/actyx_213.png)](https://developer.actyx.com/releases/actyx/2.13.2)
 
 # API
 
@@ -39,14 +48,16 @@ https://github.com/ipfs-rust/ipfs-embed
 - built on rust-libp2p and sqlite
 - focus on the API
 
-# blocking local io
+# local io
 
+- strictly separated from network io
+- blocking 👻
 - async is not without perf and mental overhead
 - sync simplifies writing complex rust code on top
   - see my banyan talk in the ipfs 201 session
-- accessing local data should be memory mapped IO anyway
+- accessing local data should be consistently fast
 - my opinion: only sane thing to do on embedded
-- this will be different for a cloud deployment
+- might be different for a cloud deployment
 
 ## Local IO api
 
@@ -60,6 +71,9 @@ pub fn insert(&self, block: Block) -> Result<()>
 
 // Checks if the block is in the block store.
 pub fn contains(&self, cid: &Cid) -> Result<bool>
+
+/// Returns an Iterator of Cids for all blocks stored in the block store.
+pub fn iter(&self) -> Result<impl Iterator<Item = Cid>>;
 ```
 
 ## Mental cost of async
@@ -85,27 +99,29 @@ pub fn contains(&self, cid: &Cid) -> Result<bool>
 pub trait IpfsFetchApi {
     async fn fetch(&self, cid: &Cid) -> Result<Option<Bytes>>;
 ```
-- But allocates even for getting a 1 byte block from fast local storage
+- But allocates even for getting a 1 byte block
   ```rust
 trait IpfsFetchApi {
-    fn fetch<'a, 'life0, 'life1, 'async_trait>(
-        &'life0 self, cid: &'life1 Cid,
-    ) -> Pin<Box<dyn Future<Output = Result<Bytes>> + 'async_trait>>
+    fn fetch(&self, cid: &Cid)
+      -> Pin<Box<dyn Future<Output = Result<Bytes>>>>
 ```
 - in async rust, abstraction is no longer without cost
 
 ## But surely not *everything* can be sync?
 
-- I think sled hits a sweet spot
+- I think [sled](https://crates.io/crates/sled) hits a sweet spot
 - Cheap local interactions are sync
 - Flush is async
 - Ipfs-Embed follows this
   - `sync`, `fetch`, `flush` are async
-- <sled author on async>
-- <tomaka rant on async>
+
+- [@spacejam on rust async for sled](https://github.com/spacejam/sled/issues/1123)
+- [@tomaka on rust async](https://tomaka.medium.com/a-look-back-at-asynchronous-rust-d54d63934a1c)
+  <^ **THIS!**
+
 # Pinning
 
-- pinning is independent of what data you actually have
+- pinning is independent of block availability
 - you can pin things you don't have
   - pin the root of wikipedia before looking at it
   - while you browse it everything will be kept
@@ -122,6 +138,7 @@ trait IpfsFetchApi {
 - ephemeral. On restart they are gone
 - easy to implement with an embedded in-process ipfs
 <!--- lifetime of ipfs is the same as lifetime of the app -->
+
 ## API
 
 ```rust
@@ -184,14 +201,14 @@ pub fn sync(&self, cid: &Cid, providers: Vec<PeerId>) -> SyncQuery<P>
 # Store
 
 - based on [sqlite](https://www.sqlite.org/index.html)
-- was going to use [sled](https://crates.io/crates/sled), but author advised against it
+- was going to use [sled](https://crates.io/crates/sled), but @spacejam advised against it
   - "if reliability is your primary constraint, use SQLite. sled is beta."
 
 ## Future store?
 
 - working on my own custom db [radixdb](https://crates.io/crates/radixdb)
   - radix tree with pluggable storage backend
-  - marble by <sled author> as possible storage backend
+  - marble by @spacejam as possible storage backend
   - WASM compatible low perf but simple storage backends
 
 # GC
@@ -275,11 +292,10 @@ pub trait CacheTracker {
 # Sync example
 
 ```rust
-    let mut tmp = a.create_temp_pin()?;
+    let mut tmp = ipfs.create_temp_pin()?;
     ipfs.temp_pin(&mut tmp, cid);
-    b.sync(cid, peers)
-        .await?;
-    b.alias(DAG_ROOT, Some(cid))?;
+    ipfs.sync(cid, peers).await?;
+    ipfs.alias(DAG_ROOT, Some(cid))?;
     drop(tmp);
 ```
 
@@ -292,6 +308,7 @@ pub trait CacheTracker {
         let _ = a.insert(block)?;
     }
     a.alias(DAG_ROOT, builder.prev.as_ref())?;
+    drop(tmp);
 ```
 
 # Peers
@@ -310,4 +327,7 @@ pub trait CacheTracker {
   - currently struct that implements `Stream` and `Future`.
 - should subscribe be for pubsub and broadcast, or separate?
 - biggest: incomplete sync of graphs
+  - just limit depth?
   - graphsync.rs?
+  - send predicate over?
+  # Audience Questions
