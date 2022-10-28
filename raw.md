@@ -15,7 +15,7 @@ lang: en
   - distributed event sourcing for factories
 - [number zero](n0.computer)
   - iroh, fastest ipfs on any planet
-  
+
 # Ipfs-Embed
 
 https://github.com/ipfs-rust/ipfs-embed
@@ -26,6 +26,10 @@ https://github.com/ipfs-rust/ipfs-embed
 - *some* kubo interop, but not primary design goal
 - intended for small private swarms
 - lots of bulletproofing due to prod use
+
+# Actyx
+
+[![](img/actyx.png)](https://actyx.com)
 
 # Features
 
@@ -111,7 +115,7 @@ trait IpfsFetchApi {
 
 - I think [sled](https://crates.io/crates/sled) hits a sweet spot
 - Cheap local interactions are sync
-- Flush is async
+- Flush is optionally async
 - Ipfs-Embed follows this
   - `sync`, `fetch`, `flush` are async
 
@@ -160,11 +164,20 @@ pub fn temp_pin(&self, tmp: &mut TempPin, cid: &Cid) -> Result<()>
 ## API
 
 ```rust
-pub fn alias<T: AsRef<[u8]> + Send + Sync>(
-    &self,
-    alias: T,
-    cid: Option<&Cid>
-) -> Result<()>
+pub fn alias(&self, alias: impl AsRef<[u8]>, cid: Option<&Cid>)
+  -> Result<()>
+```
+
+## Build example
+
+```rust
+    let mut tmp = ipfs.create_temp_pin()?;
+    while let Some(block) = builder.next() {
+        ipfs.temp_pin(&mut tmp, block.cid())?;
+        let _ = a.insert(block)?;
+    }
+    a.alias(DAG_ROOT, builder.prev.as_ref())?;
+    drop(tmp);
 ```
 
 # Network
@@ -183,6 +196,17 @@ pub async fn fetch(&self, cid: &Cid, providers: Vec<PeerId>) -> Result<Block<P>>
 
 // sync an entire DAG, returning an update stream
 pub fn sync(&self, cid: &Cid, providers: Vec<PeerId>) -> SyncQuery<P>
+```
+
+## Sync example
+
+```rust
+    let mut tmp = ipfs.create_temp_pin()?;
+    ipfs.temp_pin(&mut tmp, cid);
+    // sync implements both Stream and Future
+    ipfs.sync(cid, peers).await?;
+    ipfs.alias(DAG_ROOT, Some(cid))?;
+    drop(tmp);
 ```
 
 ## Messaging API
@@ -213,7 +237,7 @@ pub fn sync(&self, cid: &Cid, providers: Vec<PeerId>) -> SyncQuery<P>
 
 # GC
 
-- Uses recursive sqlite query to figure out what to keep
+- Uses recursive sqlite query to figure out live set
 - `WITH_RECURSIVE` FTW
 <!---
   not that fast, but rocks solid and quick to implement bc sqlite
@@ -239,7 +263,8 @@ WHERE id NOT IN descendant_of;
 ## Tradeoffs
 
 - very slow compared to in mem graph travesal
-- was fast to implement and bulletproof because of SQLite ACID guarantees
+- was fast to implement
+- bulletproof because of SQLite ACID guarantees
 
 # GC time limits
 
@@ -289,28 +314,6 @@ pub trait CacheTracker {
 }
 ```
 
-# Sync example
-
-```rust
-    let mut tmp = ipfs.create_temp_pin()?;
-    ipfs.temp_pin(&mut tmp, cid);
-    ipfs.sync(cid, peers).await?;
-    ipfs.alias(DAG_ROOT, Some(cid))?;
-    drop(tmp);
-```
-
-# Build example
-
-```rust
-    let mut tmp = ipfs.create_temp_pin()?;
-    while let Some(block) = builder.next() {
-        ipfs.temp_pin(&mut tmp, block.cid())?;
-        let _ = a.insert(block)?;
-    }
-    a.alias(DAG_ROOT, builder.prev.as_ref())?;
-    drop(tmp);
-```
-
 # Peers
 
 - can't afford to have 600 peers on embed hw
@@ -330,4 +333,3 @@ pub trait CacheTracker {
   - just limit depth?
   - graphsync.rs?
   - send predicate over?
-  # Audience Questions

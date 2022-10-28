@@ -29,6 +29,7 @@ lang: en
 - [local first](https://martin.kleppmann.com/papers/local-first.pdf)
 - first small private swarms
 - then on global IPFS
+- Rust codebase
 
 ![Actyx](img/actyx.png)
 
