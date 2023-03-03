@@ -2,16 +2,16 @@
 pandoc \
     -f markdown \
     -t revealjs \
-    -V theme=moon -i --slide-level=2 \
+    -V theme=white -V transition=none -i --slide-level=2 \
     --standalone --embed-resources \
-    -o target/ipfs-embed.html \
+    -o target/bao.html \
     --verbose \
-    raw.md
+    bao.md
 # pandoc \
 #     -f markdown \
 #     -t revealjs \
 #     -V theme=beige -i --slide-level=2 \
-#     -o target/ipfs-embed.html \
+#     -o target/bao.html \
 #     --verbose \
-#     raw.md
-# pandoc -f markdown -t beamer -i --slide-level 2 -o target/ipfs-embed.pdf ipfs-embed.md
+#     bao.md
+# pandoc -f markdown -t beamer -i --slide-level 2 -o target/bao.pdf bao.md
